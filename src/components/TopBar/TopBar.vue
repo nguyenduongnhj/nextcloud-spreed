@@ -1,0 +1,552 @@
+<!--
+  - @copyright Copyright (c) 2019 Marco Ambrosini <marcoambrosini@pm.me>
+  -
+  - @author Marco Ambrosini <marcoambrosini@pm.me>
+  -
+  - @license GNU AGPL version 3 or any later version
+  -
+  - This program is free software: you can redistribute it and/or modify
+  - it under the terms of the GNU Affero General Public License as
+  - published by the Free Software Foundation, either version 3 of the
+  - License, or (at your option) any later version.
+  -
+  - This program is distributed in the hope that it will be useful,
+  - but WITHOUT ANY WARRANTY; without even the implied warranty of
+  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+  - GNU Affero General Public License for more details.
+  -
+  - You should have received a copy of the GNU Affero General Public License
+  - along with this program. If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+	<div class="top-bar" :class="{ 'in-call': isInCall }">
+		<ConversationIcon
+			v-if="!isInCall"
+			class="conversation-icon"
+			:item="conversation"
+			:hide-favorite="false"
+			:hide-call="false" />
+		<!-- conversation header -->
+		<a v-if="!isInCall"
+			class="conversation-header"
+			@click="openConversationSettings">
+			<div class="conversation-header__text">
+				<p class="title">
+					{{ conversation.displayName }}
+				</p>
+				<p v-if="conversation.description"
+					v-tooltip.bottom="{
+						content: renderedDescription,
+						delay: { show: 500, hide: 500 },
+						autoHide: false,
+						html: true,
+					}"
+					class="description">
+					{{ conversation.description }}
+				</p>
+			</div>
+		</a>
+		<div class="top-bar__buttons">
+			<CallButton class="top-bar__button" />
+			<!-- Call layout switcher -->
+			<Actions
+				slot="trigger"
+				class="forced-background"
+				:container="container">
+				<ActionButton v-if="isInCall"
+					:icon="changeViewIconClass"
+					@click="changeView">
+					{{ changeViewText }}
+				</actionbutton>
+			</Actions>
+			<!-- sidebar toggle -->
+			<Actions
+				v-shortkey.once="['f']"
+				class="top-bar__button forced-background"
+				menu-align="right"
+				:aria-label="t('spreed', 'Conversation actions')"
+				:container="container"
+				@shortkey.native="toggleFullscreen">
+				<ActionButton
+					:icon="iconFullscreen"
+					:aria-label="t('spreed', 'Toggle fullscreen')"
+					:close-after-click="true"
+					@click="toggleFullscreen">
+					{{ labelFullscreen }}
+				</ActionButton>
+				<ActionSeparator
+					v-if="showModerationOptions" />
+				<ActionLink
+					v-if="isFileConversation"
+					icon="icon-text"
+					:href="linkToFile">
+					{{ t('spreed', 'Go to file') }}
+				</ActionLink>
+				<template
+					v-if="showModerationOptions">
+					<ActionButton
+						:close-after-click="true"
+						icon="icon-rename"
+						@click="handleRenameConversation">
+						{{ t('spreed', 'Rename conversation') }}
+					</ActionButton>
+				</template>
+				<ActionButton
+					v-if="!isOneToOneConversation"
+					icon="icon-clippy"
+					:close-after-click="true"
+					@click="handleCopyLink">
+					{{ t('spreed', 'Copy link') }}
+				</ActionButton>
+				<template
+					v-if="showModerationOptions && canFullModerate && isInCall">
+					<ActionSeparator />
+					<ActionButton
+						:close-after-click="true"
+						@click="forceMuteOthers">
+						<MicrophoneOff
+							slot="icon"
+							:size="16"
+							decorative
+							title="" />
+						{{ t('spreed', 'Mute others') }}
+					</ActionButton>
+				</template>
+				<ActionSeparator
+					v-if="showModerationOptions" />
+				<ActionButton
+					icon="icon-settings"
+					:close-after-click="true"
+					@click="showConversationSettings">
+					{{ t('spreed', 'Conversation settings') }}
+				</ActionButton>
+			</Actions>
+			<Actions v-if="showOpenSidebarButton"
+				class="top-bar__button forced-background"
+				close-after-click="true"
+				:container="container">
+				<ActionButton
+					v-if="isInCall"
+					key="openSideBarButtonMessageText"
+					@click="openSidebar">
+					<MessageText
+						slot="icon"
+						:size="16"
+						title=""
+						fill-color="#ffffff"
+						decorative />
+				</ActionButton>
+				<ActionButton
+					v-else
+					key="openSideBarButtonMenuPeople"
+					:icon="iconMenuPeople"
+					@click="openSidebar" />
+			</Actions>
+		</div>
+		<CounterBubble
+			v-if="showOpenSidebarButton && isInCall && unreadMessagesCounter > 0"
+			class="unread-messages-counter"
+			:highlighted="hasUnreadMentions">
+			{{ unreadMessagesCounter }}
+		</CounterBubble>
+	</div>
+</template>
+
+<script>
+import { showError, showSuccess, showMessage } from '@nextcloud/dialogs'
+import ActionButton from '@nextcloud/vue/dist/Components/ActionButton'
+import Actions from '@nextcloud/vue/dist/Components/Actions'
+import CounterBubble from '@nextcloud/vue/dist/Components/CounterBubble'
+import CallButton from './CallButton'
+import BrowserStorage from '../../services/BrowserStorage'
+import ActionLink from '@nextcloud/vue/dist/Components/ActionLink'
+import ActionSeparator from '@nextcloud/vue/dist/Components/ActionSeparator'
+import MessageText from 'vue-material-design-icons/MessageText'
+import MicrophoneOff from 'vue-material-design-icons/MicrophoneOff'
+import { CONVERSATION, PARTICIPANT } from '../../constants'
+import { generateUrl } from '@nextcloud/router'
+import { callParticipantCollection } from '../../utils/webrtc/index'
+import { emit } from '@nextcloud/event-bus'
+import ConversationIcon from '../ConversationIcon'
+import Tooltip from '@nextcloud/vue/dist/Directives/Tooltip'
+import richEditor from '@nextcloud/vue/dist/Mixins/richEditor'
+
+export default {
+	name: 'TopBar',
+
+	directives: {
+		Tooltip,
+	},
+
+	components: {
+		ActionButton,
+		Actions,
+		ActionLink,
+		CounterBubble,
+		CallButton,
+		ActionSeparator,
+		MessageText,
+		MicrophoneOff,
+		ConversationIcon,
+	},
+
+	mixins: [richEditor],
+
+	props: {
+		isInCall: {
+			type: Boolean,
+			required: true,
+		},
+	},
+
+	data: () => {
+		return {
+			unreadNotificationHandle: null,
+		}
+	},
+
+	computed: {
+		container() {
+			return this.$store.getters.getMainContainerSelector()
+		},
+
+		isFullscreen() {
+			return this.$store.getters.isFullscreen()
+		},
+
+		iconFullscreen() {
+			if (this.isInCall) {
+				return 'forced-white icon-fullscreen'
+			}
+			return 'icon-fullscreen'
+		},
+
+		labelFullscreen() {
+			if (this.isFullscreen) {
+				return t('spreed', 'Exit fullscreen (F)')
+			}
+			return t('spreed', 'Fullscreen (F)')
+		},
+
+		iconMenuPeople() {
+			if (this.isInCall) {
+				return 'forced-white icon-menu-people'
+			}
+			return 'icon-menu-people'
+		},
+
+		showOpenSidebarButton() {
+			return !this.$store.getters.getSidebarStatus
+		},
+
+		changeViewText() {
+			if (this.isGrid) {
+				return t('spreed', 'Speaker view')
+			} else {
+				return t('spreed', 'Grid view')
+			}
+		},
+		changeViewIconClass() {
+			if (this.isGrid) {
+				return 'forced-white icon-promoted-view'
+			} else {
+				return 'forced-white icon-grid-view'
+			}
+		},
+
+		isFileConversation() {
+			return this.conversation.objectType === 'file' && this.conversation.objectId
+		},
+
+		isOneToOneConversation() {
+			return this.conversation.type === CONVERSATION.TYPE.ONE_TO_ONE
+		},
+
+		linkToFile() {
+			if (this.isFileConversation) {
+				return window.location.protocol + '//' + window.location.host + generateUrl('/f/' + this.conversation.objectId)
+			} else {
+				return ''
+			}
+		},
+
+		participantType() {
+			return this.conversation.participantType
+		},
+
+		canFullModerate() {
+			return this.participantType === PARTICIPANT.TYPE.OWNER || this.participantType === PARTICIPANT.TYPE.MODERATOR
+		},
+
+		canModerate() {
+			return this.canFullModerate || this.participantType === PARTICIPANT.TYPE.GUEST_MODERATOR
+		},
+
+		showModerationOptions() {
+			return !this.isOneToOneConversation && this.canModerate
+		},
+
+		token() {
+			return this.$store.getters.getToken()
+		},
+
+		conversation() {
+			return this.$store.getters.conversation(this.token) || this.$store.getters.dummyConversation
+		},
+
+		unreadMessagesCounter() {
+			return this.conversation.unreadMessages
+		},
+		hasUnreadMentions() {
+			return this.conversation.unreadMention
+		},
+
+		linkToConversation() {
+			if (this.token !== '') {
+				return window.location.protocol + '//' + window.location.host + generateUrl('/call/' + this.token)
+			} else {
+				return ''
+			}
+		},
+
+		conversationHasSettings() {
+			return this.conversation.type === CONVERSATION.TYPE.GROUP
+				|| this.conversation.type === CONVERSATION.TYPE.PUBLIC
+		},
+
+		isGrid() {
+			return this.$store.getters.isGrid
+		},
+
+		renderedDescription() {
+			return this.renderContent(this.conversation.description)
+		},
+	},
+
+	watch: {
+		unreadMessagesCounter(newValue, oldValue) {
+			if (!this.isInCall || !this.showOpenSidebarButton) {
+				return
+			}
+
+			// new messages arrived
+			if (newValue > 0 && oldValue === 0 && !this.hasUnreadMentions) {
+				this.notifyUnreadMessages(t('spreed', 'You have new unread messages in the chat.'))
+			}
+		},
+
+		hasUnreadMentions(newValue, oldValue) {
+			if (!this.isInCall || !this.showOpenSidebarButton) {
+				return
+			}
+
+			if (newValue) {
+				this.notifyUnreadMessages(t('spreed', 'You have been mentioned in the chat.'))
+			}
+		},
+
+		isInCall(newValue) {
+			if (!newValue) {
+				// discard notification if the call ends
+				this.notifyUnreadMessages(null)
+			}
+		},
+	},
+
+	mounted() {
+		document.body.classList.add('has-topbar')
+		document.addEventListener('fullscreenchange', this.fullScreenChanged, false)
+		document.addEventListener('mozfullscreenchange', this.fullScreenChanged, false)
+		document.addEventListener('MSFullscreenChange', this.fullScreenChanged, false)
+		document.addEventListener('webkitfullscreenchange', this.fullScreenChanged, false)
+	},
+
+	beforeDestroy() {
+		this.notifyUnreadMessages(null)
+		document.removeEventListener('fullscreenchange', this.fullScreenChanged, false)
+		document.removeEventListener('mozfullscreenchange', this.fullScreenChanged, false)
+		document.removeEventListener('MSFullscreenChange', this.fullScreenChanged, false)
+		document.removeEventListener('webkitfullscreenchange', this.fullScreenChanged, false)
+		document.body.classList.remove('has-topbar')
+	},
+
+	methods: {
+		notifyUnreadMessages(message) {
+			if (this.unreadNotificationHandle) {
+				this.unreadNotificationHandle.hideToast()
+				this.unreadNotificationHandle = null
+			}
+			if (message) {
+				this.unreadNotificationHandle = showMessage(message)
+			}
+		},
+
+		openSidebar() {
+			this.$store.dispatch('showSidebar')
+			BrowserStorage.setItem('sidebarOpen', 'true')
+		},
+
+		showConversationSettings() {
+			emit('show-conversation-settings')
+		},
+
+		fullScreenChanged() {
+			this.$store.dispatch(
+				'setIsFullscreen',
+				document.webkitIsFullScreen || document.mozFullScreen || document.msFullscreenElement
+			)
+		},
+
+		toggleFullscreen() {
+			if (this.isFullscreen) {
+				this.disableFullscreen()
+				this.$store.dispatch('setIsFullscreen', false)
+			} else {
+				this.enableFullscreen()
+				this.$store.dispatch('setIsFullscreen', true)
+			}
+		},
+
+		enableFullscreen() {
+			const fullscreenElem = document.getElementById('content-vue')
+
+			if (fullscreenElem.requestFullscreen) {
+				fullscreenElem.requestFullscreen()
+			} else if (fullscreenElem.webkitRequestFullscreen) {
+				fullscreenElem.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT)
+			} else if (fullscreenElem.mozRequestFullScreen) {
+				fullscreenElem.mozRequestFullScreen()
+			} else if (fullscreenElem.msRequestFullscreen) {
+				fullscreenElem.msRequestFullscreen()
+			}
+		},
+
+		disableFullscreen() {
+			if (document.exitFullscreen) {
+				document.exitFullscreen()
+			} else if (document.webkitExitFullscreen) {
+				document.webkitExitFullscreen()
+			} else if (document.mozCancelFullScreen) {
+				document.mozCancelFullScreen()
+			} else if (document.msExitFullscreen) {
+				document.msExitFullscreen()
+			}
+		},
+
+		changeView() {
+			this.$store.dispatch('setCallViewMode', { isGrid: !this.isGrid })
+			this.$store.dispatch('selectedVideoPeerId', null)
+		},
+
+		async handleCopyLink() {
+			try {
+				await this.$copyText(this.linkToConversation)
+				showSuccess(t('spreed', 'Conversation link copied to clipboard.'))
+			} catch (error) {
+				showError(t('spreed', 'The link could not be copied.'))
+			}
+		},
+		handleRenameConversation() {
+			this.$store.dispatch('isRenamingConversation', true)
+			this.$store.dispatch('showSidebar')
+		},
+		forceMuteOthers() {
+			callParticipantCollection.callParticipantModels.forEach(callParticipantModel => {
+				callParticipantModel.forceMute()
+			})
+		},
+
+		openConversationSettings() {
+			emit('show-conversation-settings')
+		},
+	},
+}
+</script>
+
+<style lang="scss" scoped>
+
+@import '../../assets/variables';
+
+.top-bar {
+	height: $top-bar-height;
+	right: 12px; /* needed so we can still use the scrollbar */
+	display: flex;
+	z-index: 10;
+	justify-content: flex-end;
+	padding: 8px;
+	width: 100%;
+	background-color: var(--color-main-background);
+	border-bottom: 1px solid var(--color-border);
+
+	&.in-call {
+		right: 0;
+		background-color: transparent;
+		border: none;
+		position: absolute;
+		top: 0;
+		left:0;
+		.forced-background {
+			background-color: rgba(0,0,0,0.1) !important;
+			border-radius: var(--border-radius-pill);
+		}
+	}
+
+	&__buttons {
+		display: flex;
+		margin-left: 8px;
+	}
+
+	&__button {
+		margin: 0 2px;
+		align-self: center;
+		display: flex;
+		align-items: center;
+		white-space: nowrap;
+		.icon {
+			margin-right: 4px !important;
+		}
+	}
+
+	.unread-messages-counter {
+		position: absolute;
+		top: 40px;
+		right: 4px;
+		pointer-events: none;
+	}
+}
+
+.conversation-icon {
+	margin-left: 48px;
+}
+
+.conversation-header {
+	position: relative;
+	display: flex;
+	overflow-x: hidden;
+	overflow-y: clip;
+	white-space: nowrap;
+	width: 100%;
+	cursor: pointer;
+	&__text {
+		display: flex;
+		flex-direction:column;
+		flex-grow: 1;
+		margin-left: 8px;
+		justify-content: center;
+		width: 100%;
+		overflow: hidden;
+	}
+	.title {
+		font-weight: bold;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.description {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: fit-content;
+		color: var(--color-text-lighter);
+	}
+}
+</style>

@@ -1,0 +1,37 @@
+site_name: Nextcloud Talk API documentation
+
+theme:
+  name: readthedocs
+  highlightjs: true
+  hljs_languages:
+    - php
+    - js
+    - bash
+
+markdown_extensions:
+  - admonition
+  - def_list
+  - toc:
+      permalink: "#"
+      baselevel: 2
+
+nav:
+  - 'Nextcloud Talk API': 'index.md'
+  - 'System requirements': 'system-requirements.md'
+  - 'Call experience': 'call-experience.md'
+  - Constants: 'constants.md'
+  - Capabilities: 'capabilities.md'
+  - 'API documentation':
+      - 'Conversations management': 'conversation.md'
+      - 'Participants management': 'participant.md'
+      - 'Call management': 'call.md'
+      - 'Chat management': 'chat.md'
+      - 'Webinar management': 'webinar.md'
+      - 'Settings': 'settings.md'
+      - 'Integration by other apps': 'integration.md'
+      - 'Signaling API': 'internal-signaling.md'
+      - 'External signaling API': 'standalone-signaling-api-v1.md'
+  - Commands: 'commands.md'
+  - 'PHP events': 'events.md'
+  - 'Configuring coTURN': 'TURN.md'
+  - 'Matterbridge integration': 'matterbridge.md'
